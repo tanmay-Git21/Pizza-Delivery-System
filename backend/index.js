@@ -8,6 +8,9 @@ import nodemailer from "nodemailer";
 import connectDb from "./configs/connectDb.js";
 import User from "./models/userModel.js";
 import Otp from "./models/otpModel.js";
+import Inventory from "./models/inventoryModel.js";
+import Order from "./models/orderModel.js";
+import PizzaOptions from "./models/pizzaOptionsModel.js"; // Model for pizza options
 
 // Environment Configuration
 dotenv.config();
@@ -49,21 +52,20 @@ const sendOtp = async (email) => {
 
 // Routes
 
+// --- Authentication Routes ---
+
 // User Registration Route
 app.post("/api/auth/register", async (req, res) => {
   const { firstName, lastName, email, password, authority } = req.body;
 
   try {
-    // Check if the user already exists
     const userExist = await User.findOne({ email });
     if (userExist) {
       return res.status(400).json({ message: "User already exists" });
     }
 
-    // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create a new user object
     const newUser = new User({
       firstName,
       lastName,
@@ -72,31 +74,25 @@ app.post("/api/auth/register", async (req, res) => {
       password: hashedPassword,
     });
 
-    // Generate email verification token
     const emailVerificationToken = jwt.sign(
       { email },
-      process.env.JWT_SECRET, // Secret key from environment variables
-      { expiresIn: "1h" } // Token expires in 1 hour
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
     );
 
-    // Set expiration time for the token
-    const emailVerificationTokenExpiration = new Date(Date.now() + 3600 * 1000); // 1 hour from now
-
-    // Save the email verification token and expiration time to the user
+    const emailVerificationTokenExpiration = new Date(Date.now() + 3600 * 1000);
     newUser.emailVerificationToken = emailVerificationToken;
     newUser.emailVerificationTokenExpiration = emailVerificationTokenExpiration;
 
-    // Save the user in the database
     await newUser.save();
 
-    // Send the email verification link
     const verificationLink = `http://localhost:8000/api/auth/verify-email/${emailVerificationToken}`;
 
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: process.env.EMAIL_USER, // Your email address
-        pass: process.env.EMAIL_PASS, // Your email password or app password
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
       },
     });
 
@@ -109,10 +105,8 @@ app.post("/api/auth/register", async (req, res) => {
 
     await transporter.sendMail(mailOptions);
 
-    // Return response with message
     res.status(201).json({
-      message:
-        "User registered successfully. Please check your email to verify your account.",
+      message: "User registered successfully. Please check your email to verify your account.",
     });
   } catch (error) {
     res.status(500).json({ message: "Error in registration", error });
@@ -224,9 +218,114 @@ app.post("/api/auth/update-password", async (req, res) => {
   }
 });
 
+// --- Pizza Options & Orders ---
+
+// Get Pizza Options
+app.get("/api/pizza-options", async (req, res) => {
+  try {
+    const options = await PizzaOptions.find();
+    res.status(200).json(options);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching pizza options", error });
+  }
+});
+
+// Place Order
+app.post("/api/order", async (req, res) => {
+  const { userId, pizzaDetails, paymentStatus } = req.body;
+
+  try {
+    const newOrder = new Order({
+      userId,
+      pizzaDetails,
+      paymentStatus,
+      status: "Order Received",
+    });
+    await newOrder.save();
+
+    res.status(201).json({ message: "Order placed successfully", order: newOrder });
+  } catch (error) {
+    res.status(500).json({ message: "Error placing order", error });
+  }
+});
+
+// Get Order Status
+app.get("/api/order-status/:orderId", async (req, res) => {
+  const { orderId } = req.params;
+
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+    res.status(200).json(order);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching order status", error });
+  }
+});
+
+// Update Order Status (Admin Only)
+app.patch("/api/order-status/:orderId", async (req, res) => {
+  const { orderId } = req.params;
+  const { status } = req.body;
+
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    order.status = status;
+    await order.save();
+    res.status(200).json({ message: "Order status updated", order });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating order status", error });
+  }
+});
+
+// --- Inventory Management (Admin Only) ---
+
+// View Inventory
+app.get("/api/inventory", async (req, res) => {
+  const { adminId } = req.query;
+
+  try {
+    const inventory = await Inventory.findOne({ adminId });
+    if (!inventory) {
+      return res.status(404).json({ message: "Inventory not found" });
+    }
+    res.status(200).json(inventory);
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching inventory", error });
+  }
+});
+
+// Update Inventory Item
+app.patch("/api/inventory/update", async (req, res) => {
+  const { adminId, itemId, quantity } = req.body;
+
+  try {
+    const inventory = await Inventory.findOne({ adminId });
+    if (!inventory) {
+      return res.status(404).json({ message: "Inventory not found" });
+    }
+
+    const item = inventory.items.id(itemId);
+    if (!item) {
+      return res.status(404).json({ message: "Item not found in inventory" });
+    }
+
+    item.quantity = quantity;
+    await inventory.save();
+    res.status(200).json({ message: "Inventory item updated successfully", item });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating inventory", error });
+  }
+});
+
 // Home Route
 app.get("/", (req, res) => {
-  res.send("Welcome to the Home Page");
+  res.send("Welcome to the Pizza Ordering API");
 });
 
 // Start the Server
